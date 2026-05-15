@@ -6,6 +6,31 @@
 </div>
 <hr /><br />
 
+> **AlJohri fork note.** This fork relaxes `Session::run` / `run_with_options` / `run_binding` / `run_binding_with_options` / `run_async` from `&mut self` to `&self`. Internally these methods already delegate to private `&self` impls (`run_inner` etc.), so the public `&mut self` is only a signature-level constraint. The change lets multiple threads call `Run` concurrently on an `Arc<Session>` without fabricating `&mut` from `&` (which is UB under Rust's aliasing model).
+>
+> Microsoft's high-level intent for ONNX Runtime is stated at <https://onnxruntime.ai/docs/reference/high-level-design.html>:
+>
+> > "Multiple threads can invoke the Run() method on the same inference session object. See API doc for more details."
+>
+> An explicit Microsoft contributor statement that this contract is load-bearing across EPs appears in microsoft/onnxruntime#19301: *"InferenceSession::Run() is guaranteed to be thread-safe meaning multiple threads can call this function concurrently."*
+>
+> **This fork is intended for the CPU EP only** — that's where Microsoft's thread-safety contract is best-documented and best-tested. Other EPs have varying and EP-specific caveats: DirectML explicitly forbids concurrent `Run` and requires `enable_mem_pattern = false`; CUDA Graphs forbids concurrent `Run` when enabled; plain CUDA / TensorRT aren't addressed in the official docs, so concurrent use is at your own risk.
+>
+> The `&mut self` signature was introduced in upstream commit [`bd2aff7`](https://github.com/pykeio/ort/commit/bd2aff711ec364db8d41be6a3c4690e5feaf36b4) ("refactor!: make `Session::run` take `&mut self`", 2025-02-08), first released in `v2.0.0-rc.10`. Through `v2.0.0-rc.9` the method took `&self` and the share-via-`Arc` pattern was directly expressible; this fork restores that. Upstream's canonical pinned discussion is pykeio/ort#402 ("Thread safety and `Send`/`Sync`"); the explicit refusals to expose a `&self` variant since rc.10 are pykeio/ort#511 and pykeio/ort#415.
+>
+> **Pulling new upstream:**
+>
+> ```sh
+> OLD_BASE=$(git rev-parse --short HEAD~1)          # upstream commit our patch is currently on top of
+> git fetch upstream
+> git rebase upstream/main                          # one commit replays on top of new upstream; resolve conflicts if any
+> git tag aljohri-$OLD_BASE HEAD@{1}                # anchor pre-rebase HEAD so its hash stays GC-safe
+> git push origin aljohri-$OLD_BASE
+> git push --force-with-lease origin main
+> ```
+>
+> Downstream consumers pin to the resulting commit hash via `rev = "..."` in `Cargo.toml` (not the tag — tags exist solely to keep old hashes reachable on GitHub after the force-push). Tag names mirror the upstream base short-sha so it's obvious which upstream `main` each fork build is rebased on.
+
 `ort` is a Rust interface for performing hardware-accelerated inference & training on machine learning models in the [Open Neural Network Exchange](https://onnx.ai/) (ONNX) format.
 
 Based on the now-inactive [`onnxruntime-rs`](https://github.com/nbigaouette/onnxruntime-rs) crate, `ort` is primarily a wrapper for Microsoft's [ONNX Runtime](https://onnxruntime.ai/) library, but offers support for [other pure-Rust runtimes](https://ort.pyke.io/backends).
